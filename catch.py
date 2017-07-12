@@ -1,4 +1,3 @@
-
 def CatchRun(env, target, source, test_specs=None, sections=None,
         reporter=None, name=None, success=None, abortx=None,
         out=None, nothrow=None, invisibles=None, warn=None,
@@ -6,11 +5,11 @@ def CatchRun(env, target, source, test_specs=None, sections=None,
         rng_seed=None, filenames_as_tags=None, parameters=None):
     ''' For usage of each option see [Catch documentation](https://github.com/philsquared/Catch/blob/master/docs/command-line.md).
     In general, None will leave out the option from the command line, every other value will add the argument.
-    Whenever a list is expected, any iterable will do, using str() to convert the elements to strings beforehand.
-    Whenever a number is expected, this conversion is first enforced via int()
-    Whenever an enum from strings is expected, str() will be called. The result will be checked against the valid values issuing a warning when the value is not known
-    Whenever a bool is expected, bool() will be called on the argument
-    Whenever an argument does not expect and value, it is treated as a bool, except that it will not appear at all when evaluated to false
+    Where a list is expected, any iterable will do, using str() to convert the elements to strings beforehand.
+    Where a number is expected, this conversion is first enforced via int()
+    Where an enum from strings is expected, str() will be called. The result will be checked against the valid values issuing a warning when the value is not known
+    Where a bool is expected, bool() will be called on the argument
+    Where an argument does not expect and value, it is treated as a bool, except that it will not appear at all when evaluated to false
     Additionally, the parameter arguments can be used to give other parameters
     '''
     import SCons.Warnings
@@ -60,17 +59,37 @@ def CatchRun(env, target, source, test_specs=None, sections=None,
     env.Depends(target, source)
     env.AlwaysBuild(target)
 
-def CatchTest(env, target, source, compiled_name=None, compile_args=None, **kwargs): # Compiles a test from the given sources and runs it
-    if target is None: target = 'catch'
+
+def scan_sources_for_main(env, sources):
+    return False
+
+def get_default_main(env):
+    if not env.get('DEFAULT_CATCHMAIN'):
+        new_main = env.CatchMain()
+        env.Replace(DEFAULT_CATCHMAIN=new_main)
+    return env.get('DEFAULT_CATCHMAIN')
+
+def CatchTest(env, target, source, test_alias=None, add_main=None, compile_args=None, **kwargs):
+    """ Compiles a test from the given sources and runs it. It will scan the source
+    code files on whether one of them is a main file and add a shared main object
+    where necessary. You can explicitely set this behaviour by setting the keyword
+    argument `add_main` to something other than None, convertible to bool.
+    """
+    if test_alias is None: test_alias = 'catch'
+    if (add_main is None and not scan_sources_for_main(env, source)) or add_main:
+        main = get_default_main(env)
+        source.append(main)
+
     compile_extra_args = {}
     if compile_args is not None: compile_extra_args.update(compile_args)
-    program = env.Program(target=compiled_name, source=source, **compile_extra_args)
-    run = env.CatchRun(target, program, **kwargs)
+
+    program = env.Program(target=target, source=source, **compile_extra_args)
+    run = env.CatchRun(test_alias, program, **kwargs)
     return (program, run)
 
 def CatchMain(env, target, source):
-    target,= source
-    target = env.File(target)
+    source = source or ['__catchmain.cpp']
+    target = env.File(*source)
     maintext = """#define CATCH_CONFIG_MAIN
 #include "catch.hpp"
 """
