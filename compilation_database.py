@@ -1,29 +1,40 @@
 import json
 import sys
 import os
+import os.path
 import atexit
-import functools
 
 import SCons.Warnings
 
 def dump_all(Databases):
+    uniquifier = lambda db: {(entry['file'], entry['output']): entry for entry in db}
+    dbifier = lambda unique: [entry for k, entry in unique.items()]
     for path, ds in Databases.iteritems():
-        f = open(path, 'w')
-        json.dump(ds, f, indent=1)
-        f.close()
+        if os.path.exists(path):
+            with open(path, 'r') as existing:
+                predb = json.load(existing)
+        else:
+            predb = []
+        predbdict = uniquifier(predb)
+        predbdict.update(uniquifier(ds))
+        result = dbifier(predbdict)
+        with open(path, 'w') as outfile:
+            json.dump(result, outfile, indent=1)
         sys.stdout.write('{} entries registered to {}\n'.format(len(ds), path))
 
-def get_databases(env):
+def get_databases():
     global COMPILATION_DATABASES
     return COMPILATION_DATABASES
 
-def set_databases(env, db):
+def set_databases(db):
     global COMPILATION_DATABASES
     COMPILATION_DATABASES = db
     atexit.register(dump_all, COMPILATION_DATABASES)
     return
 
-def CompilationDatabase(env, target, source, execute=False):
+def CompilationDatabase(
+        env, target, source,
+        execute=False, rebuild=True, silent=False):
     '''Builds a compilation database by setting no_exec, marking all targets as
     dirty and collecting the resulting command lines into a json database. You
     probably want to call this at most once in any environment.
@@ -31,10 +42,14 @@ def CompilationDatabase(env, target, source, execute=False):
     `execute` can be set to some True value.
     Multiple calls to different database locations within the same module will
     lead to come of them begin empty. The compilation commands are collected as
-    they are executed, which happens after running SConstruct files. As such, only
-    the last call within an environment will effectively collect build actions.
+    they are executed, which happens after running SConstruct files. As such,
+    only the last call within an environment will effectively collect build
+    actions.
+    Turning on 'execute' without turning off 'rebuild' will issue a warning and
+    require USER INTERACTION as it will issue an unconditional, complete
+    rebuild. This can be suppressed by also setting the 'silent' option to True
     '''
-    Databases = get_databases(env)
+    Databases = get_databases()
     target = target or env.File('#./compile_commands.json')
     target = env.File(target)
     target_key = target.abspath
@@ -43,19 +58,29 @@ def CompilationDatabase(env, target, source, execute=False):
     gathered = Databases[target_key]
 
     # Simulate building everything
-    env.Decider(lambda t,b,c: True)
+    if rebuild:
+        env.Decider(lambda t,b,c: True)
     if not execute:
         env.SetOption('no_exec', 1)
-    elif not env.GetOption('no_exec'):
+    elif not env.GetOption('no_exec') and rebuild and not silent:
         class WarnAboutFullCompile(SCons.Warnings.WarningOnByDefault):
             pass
         SCons.Warnings.warn(WarnAboutFullCompile, 'Recompiling ALL targets for database while NOT doing a dry run. This will take a while')
+        while True:
+            inp = input('Continue regardless? y/[n]')
+            if inp == 'y':
+                break
+            elif inp == 'n':
+                exit(-1)
+            else:
+                pass
+
 
     def gather_print(cmd, target, source, env):
         files = [{'command': cmd,
-                  'file': str(sfile),
+                  'file': sfile.abspath,
                   'directory': os.getcwd(),
-                  'output': str(ofile)} for sfile in source for ofile in target]
+                  'output': ofile.abspath} for sfile in source for ofile in target]
         gathered.extend(files)
 
         # Replicate default behaviour as well
@@ -67,11 +92,11 @@ def CompilationDatabase(env, target, source, execute=False):
 
 def generate(env):
     try:
-        Databases = get_databases(env)
+        get_databases()
     except Exception as ex:
-        set_databases(env, {})
+        set_databases({})
 
-    env.Append(BUILDERS = {'CompilationDatabase': CompilationDatabase})
+    env.Append(BUILDERS={'CompilationDatabase': CompilationDatabase})
 
 def exists(env):
     return True
